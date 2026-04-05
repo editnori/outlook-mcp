@@ -345,7 +345,6 @@ function summarizeFolder(folder) {
     childFolderCount: folder.childFolderCount || 0,
     unreadItemCount: folder.unreadItemCount || 0,
     totalItemCount: folder.totalItemCount || 0,
-    wellKnownName: folder.wellKnownName || '',
     isHidden: Boolean(folder.isHidden),
   };
 }
@@ -1107,7 +1106,7 @@ async function callTool(config, name, args = {}) {
       const folders = await api.listCollection(
         buildPath('/me/mailFolders', {
           '$top': Math.min(Number(args.max || 50), 200),
-          '$select': 'id,displayName,parentFolderId,childFolderCount,unreadItemCount,totalItemCount,isHidden,wellKnownName',
+          '$select': 'id,displayName,parentFolderId,childFolderCount,unreadItemCount,totalItemCount,isHidden',
           ...(args.includeHidden ? {} : {'$filter': 'isHidden eq false'}),
         }),
         {max: args.max || 50}
