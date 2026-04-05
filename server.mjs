@@ -114,6 +114,8 @@ function getReceiverConfig(config) {
       config.env.OUTLOOK_LIFECYCLE_NOTIFICATION_URL ||
       `http://${config.env.OUTLOOK_RECEIVER_HOST || '127.0.0.1'}:${Number(config.env.OUTLOOK_RECEIVER_PORT || 8777)}${config.env.OUTLOOK_RECEIVER_PATH || '/graph/notifications'}`,
     clientState: config.env.OUTLOOK_SUBSCRIPTION_CLIENT_STATE || '',
+    maxBodyBytes: Number(config.env.OUTLOOK_NOTIFICATION_MAX_BODY_BYTES || 262144),
+    maxLogBytes: Number(config.env.OUTLOOK_NOTIFICATION_MAX_LOG_BYTES || 5242880),
     logFile: getNotificationLogPath(config),
   };
 }
@@ -490,7 +492,9 @@ function getIndexStore(config) {
           indexed_at = excluded.indexed_at
       `),
       deleteMessage: db.query(`DELETE FROM mail_messages WHERE id = ?`),
+      deleteMessagesByFolder: db.query(`DELETE FROM mail_messages WHERE folder_id = ?`),
       deleteSearchMessage: db.query(`DELETE FROM mail_search WHERE message_id = ?`),
+      deleteSearchByFolder: db.query(`DELETE FROM mail_search WHERE folder_id = ?`),
       insertSearchMessage: db.query(`
         INSERT INTO mail_search (
           message_id, conversation_id, folder_id, subject, participants, body_preview, body_text
@@ -504,6 +508,7 @@ function getIndexStore(config) {
           last_synced_at = excluded.last_synced_at
       `),
       getSyncState: db.query(`SELECT * FROM sync_state WHERE scope = ? AND scope_id = ?`),
+      deleteSyncState: db.query(`DELETE FROM sync_state WHERE scope = ? AND scope_id = ?`),
       getConversationMessages: db.query(`
         SELECT * FROM mail_messages
         WHERE conversation_id = ?
@@ -576,7 +581,7 @@ function indexMailMessage(store, message) {
     message.importance || '',
     JSON.stringify(message.categories || []),
     message.bodyPreview || '',
-    message.body?.content || '',
+    '',
     message.webLink || '',
     Date.now()
   );
@@ -588,7 +593,7 @@ function indexMailMessage(store, message) {
     message.subject || '',
     participants,
     message.bodyPreview || '',
-    message.body?.content || ''
+    ''
   );
 }
 
@@ -605,6 +610,11 @@ async function syncMailFolder(config, args = {}) {
   }
   const folderScope = args.folderId;
   const scope = 'mail_folder_delta';
+  if (args.fullResync) {
+    store.statements.deleteSearchByFolder.run(folderScope);
+    store.statements.deleteMessagesByFolder.run(folderScope);
+    store.statements.deleteSyncState.run(scope, folderScope);
+  }
   const existing = args.fullResync
     ? null
     : store.statements.getSyncState.get(scope, folderScope) || null;
@@ -613,7 +623,7 @@ async function syncMailFolder(config, args = {}) {
     `/me/mailFolders/${encodeURIComponent(args.folderId)}/messages/delta`,
     {
       '$top': Math.min(Number(args.pageSize || 50), 100),
-      '$select': 'id,conversationId,parentFolderId,subject,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,isRead,hasAttachments,importance,categories,bodyPreview,body,webLink',
+      '$select': 'id,conversationId,parentFolderId,subject,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,isRead,hasAttachments,importance,categories,bodyPreview,webLink',
     }
   );
 
@@ -730,7 +740,13 @@ function readNotificationLog(config, max = 50) {
     };
   }
 
-  const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean);
+  const stat = fs.statSync(file);
+  const bytesToRead = Math.min(stat.size, 512 * 1024);
+  const fd = fs.openSync(file, 'r');
+  const buffer = Buffer.alloc(bytesToRead);
+  fs.readSync(fd, buffer, 0, bytesToRead, stat.size - bytesToRead);
+  fs.closeSync(fd);
+  const lines = buffer.toString('utf8').split(/\r?\n/).filter(Boolean);
   const notifications = lines
     .slice(-Math.min(max, lines.length))
     .map((line) => {

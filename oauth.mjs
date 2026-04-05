@@ -14,7 +14,7 @@ const DEFAULT_STATE_DIR = path.join(
   'outlook-mcp'
 );
 const DEFAULT_TOKEN_FILE = path.join(DEFAULT_STATE_DIR, 'tokens.json');
-const DEFAULT_SCOPES = 'offline_access openid profile User.Read Mail.Read Mail.ReadWrite Mail.Send MailboxSettings.Read Calendars.Read Calendars.ReadWrite';
+const DEFAULT_SCOPES = 'offline_access openid profile User.Read Mail.Read Mail.Send Calendars.Read Calendars.ReadWrite';
 
 function parseArgs(argv) {
   const out = {
@@ -320,11 +320,23 @@ async function login(config, options = {}) {
 }
 
 function describeStatus(config) {
+  if (config.env.OUTLOOK_USER_TOKEN) {
+    return {
+      hasTokens: true,
+      authSource: 'OUTLOOK_USER_TOKEN',
+      tokenFile: getTokenFilePath(config),
+      redirectUri: config.env.OUTLOOK_REDIRECT_URI || '',
+      scopes: getScopeString(config).split(/\s+/).filter(Boolean),
+      hasRefreshToken: false,
+    };
+  }
+
   const tokenFile = getTokenFilePath(config);
   const token = readJsonFile(tokenFile, null, {strict: true});
   if (!token?.access_token) {
     return {
       hasTokens: false,
+      authSource: 'token_file',
       tokenFile,
       redirectUri: config.env.OUTLOOK_REDIRECT_URI || '',
       scopes: getScopeString(config).split(/\s+/).filter(Boolean),
@@ -334,6 +346,7 @@ function describeStatus(config) {
   const now = Date.now();
   return {
     hasTokens: true,
+    authSource: 'token_file',
     tokenFile,
     redirectUri: config.env.OUTLOOK_REDIRECT_URI || '',
     scopes: `${token.scope || getScopeString(config)}`.split(/\s+/).filter(Boolean),

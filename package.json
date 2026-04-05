@@ -11,7 +11,7 @@
     "auth:clear": "bun oauth.mjs clear --env-file .env.local",
     "start": "bun server.mjs --env-file .env.local",
     "start:receiver": "bun receiver.mjs --env-file .env.local",
-    "check": "bun --smol server.mjs </dev/null"
+    "check": "bun --smol server.mjs </dev/null && node --check oauth.mjs && node --check receiver.mjs"
   },
   "packageManager": "bun@1.3.11",
   "dependencies": {

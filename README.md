@@ -100,6 +100,7 @@ Notes:
 - normal access-token expiry does not require a full reauth; `server.mjs` refreshes via the stored `refresh_token`
 - if you change scopes, revoke consent, or the refresh token expires, run `auth:login` again
 - when `--env-file` is passed, that file is authoritative over Bun auto-loaded env
+- `auth:status` reports whether auth is coming from the token file or `OUTLOOK_USER_TOKEN`
 
 ### Subscription Notes
 
@@ -130,6 +131,7 @@ Important:
 
 - Microsoft Graph notification URLs normally need a publicly reachable HTTPS endpoint
 - this local receiver is a scaffold, so in practice you would front it with a tunnel or reverse proxy when creating live subscriptions
+- if you expose it publicly, set and use `OUTLOOK_SUBSCRIPTION_CLIENT_STATE`; the receiver validates that value before accepting notifications
 
 ### Run
 
@@ -157,6 +159,9 @@ Then restart Codex.
 
 - `OUTLOOK_OAUTH_TOKEN_FILE` overrides the token file location
 - `OUTLOOK_MCP_INDEX_DB` overrides the SQLite index path
+- `OUTLOOK_USER_TOKEN` forces a direct bearer token override for debugging
 - `OUTLOOK_RECEIVER_HOST`, `OUTLOOK_RECEIVER_PORT`, and `OUTLOOK_RECEIVER_PATH` configure the local notification receiver
+- `OUTLOOK_SUBSCRIPTION_CLIENT_STATE` is used as the default subscription integrity token and is validated by the receiver
 - `OUTLOOK_NOTIFICATION_URL` and `OUTLOOK_LIFECYCLE_NOTIFICATION_URL` let you pin explicit Graph subscription URLs
 - `OUTLOOK_NOTIFICATION_LOG_FILE` overrides the receiver log path
+- `OUTLOOK_NOTIFICATION_MAX_BODY_BYTES` and `OUTLOOK_NOTIFICATION_MAX_LOG_BYTES` bound receiver memory/disk usage
