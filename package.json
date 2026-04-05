@@ -1,0 +1,20 @@
+{
+  "name": "outlook-mcp",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Local stdio MCP server for Outlook and Microsoft Graph, built for Bun.",
+  "scripts": {
+    "auth:status": "bun oauth.mjs status --env-file .env.local",
+    "auth:login": "bun oauth.mjs login --env-file .env.local",
+    "auth:refresh": "bun oauth.mjs refresh --env-file .env.local",
+    "auth:clear": "bun oauth.mjs clear --env-file .env.local",
+    "start": "bun server.mjs --env-file .env.local",
+    "start:receiver": "bun receiver.mjs --env-file .env.local",
+    "check": "bun --smol server.mjs </dev/null"
+  },
+  "packageManager": "bun@1.3.11",
+  "dependencies": {
+    "@microsoft/microsoft-graph-client": "^3.0.7"
+  }
+}
