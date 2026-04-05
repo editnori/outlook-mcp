@@ -2,16 +2,9 @@
 
 import fs from 'node:fs';
 import http from 'node:http';
-import os from 'node:os';
-import path from 'node:path';
 import process from 'node:process';
 import {ensurePrivateDir} from './auth-store.mjs';
-
-const DEFAULT_STATE_DIR = path.join(
-  process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'),
-  'outlook-mcp'
-);
-const DEFAULT_NOTIFICATION_LOG = path.join(DEFAULT_STATE_DIR, 'notifications.ndjson');
+import {getNotificationLogPath, getReceiverConfig, loadConfig} from './lib.mjs';
 
 function parseArgs(argv) {
   const out = {envFile: process.env.ENV_FILE || ''};
@@ -24,74 +17,6 @@ function parseArgs(argv) {
     }
   }
   return out;
-}
-
-function parseEnvFile(file) {
-  if (!file || !fs.existsSync(file)) return {};
-  const text = fs.readFileSync(file, 'utf8');
-  const env = {};
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const idx = line.indexOf('=');
-    if (idx < 0) continue;
-    const key = line.slice(0, idx).trim();
-    let value = line.slice(idx + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    env[key] = value;
-  }
-  return env;
-}
-
-function loadConfig(envFile) {
-  const fileEnv = parseEnvFile(envFile);
-  const inheritedEnv = {...process.env};
-  if (envFile) {
-    for (const key of Object.keys(inheritedEnv)) {
-      if (key.startsWith('OUTLOOK_') || key.startsWith('MS_')) {
-        delete inheritedEnv[key];
-      }
-    }
-  }
-  const env = envFile ? {...inheritedEnv, ...fileEnv} : {...fileEnv, ...inheritedEnv};
-  return {
-    envFile,
-    envDir: envFile ? path.dirname(envFile) : process.cwd(),
-    env,
-  };
-}
-
-function resolveMaybeRelative(baseDir, value, fallback = '') {
-  if (!value) return fallback;
-  if (path.isAbsolute(value)) return value;
-  return path.join(baseDir, value);
-}
-
-function getNotificationLogPath(config) {
-  return resolveMaybeRelative(config.envDir, config.env.OUTLOOK_NOTIFICATION_LOG_FILE, DEFAULT_NOTIFICATION_LOG);
-}
-
-function getReceiverConfig(config) {
-  return {
-    host: config.env.OUTLOOK_RECEIVER_HOST || '127.0.0.1',
-    port: Number(config.env.OUTLOOK_RECEIVER_PORT || 8777),
-    path: config.env.OUTLOOK_RECEIVER_PATH || '/graph/notifications',
-    notificationUrl:
-      config.env.OUTLOOK_NOTIFICATION_URL ||
-      `http://${config.env.OUTLOOK_RECEIVER_HOST || '127.0.0.1'}:${Number(config.env.OUTLOOK_RECEIVER_PORT || 8777)}${config.env.OUTLOOK_RECEIVER_PATH || '/graph/notifications'}`,
-    lifecycleNotificationUrl:
-      config.env.OUTLOOK_LIFECYCLE_NOTIFICATION_URL ||
-      `http://${config.env.OUTLOOK_RECEIVER_HOST || '127.0.0.1'}:${Number(config.env.OUTLOOK_RECEIVER_PORT || 8777)}${config.env.OUTLOOK_RECEIVER_PATH || '/graph/notifications'}`,
-    clientState: config.env.OUTLOOK_SUBSCRIPTION_CLIENT_STATE || '',
-    maxBodyBytes: Number(config.env.OUTLOOK_NOTIFICATION_MAX_BODY_BYTES || 262144),
-    maxLogBytes: Number(config.env.OUTLOOK_NOTIFICATION_MAX_LOG_BYTES || 5242880),
-    logFile: getNotificationLogPath(config),
-  };
 }
 
 function writeNotification(config, record) {

@@ -14,7 +14,7 @@ const DEFAULT_STATE_DIR = path.join(
   'outlook-mcp'
 );
 const DEFAULT_TOKEN_FILE = path.join(DEFAULT_STATE_DIR, 'tokens.json');
-const DEFAULT_SCOPES = 'offline_access openid profile User.Read Mail.Read Mail.Send Calendars.Read Calendars.ReadWrite';
+const DEFAULT_SCOPES = 'offline_access openid profile User.Read Mail.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite';
 
 function parseArgs(argv) {
   const out = {

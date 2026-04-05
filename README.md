@@ -11,9 +11,12 @@ Local stdio MCP server for Outlook and Microsoft Graph, built as a Bun-first sta
 - local mail cache and search keyed by `conversationId`
 - message search with Microsoft Graph `$search`
 - full message fetch
+- message attachment listing and fetch
+- support/ticket thread discovery and message classification
 - calendar listing and event CRUD
 - send mail
 - reply / reply-all
+- mailbox organization helpers: categories, read state, and move
 - Graph subscription list/create/renew/delete
 - local Graph notification receiver scaffold and notification log inspection
 
@@ -60,6 +63,20 @@ separate tools on purpose. There is no silent fallback between them.
 `sync_mail_folder` is intentionally folder-scoped because Microsoft Graph message delta
 tracks changes per folder.
 
+### Support And Ticket Helpers
+
+The mail layer now includes support-oriented helpers:
+
+- `classify_message`
+- `list_ticket_threads`
+- `list_message_attachments`
+- `get_message_attachment`
+
+These are aimed at Zendesk-style follower emails and Outlook-based support intake.
+`plugin-ops-console` also imports shared helpers from `lib.mjs`, so subscription
+ensuring, notification parsing, ticket extraction, and message fetch logic can stay
+aligned with the standalone MCP instead of drifting.
+
 ### Install
 
 ```bash
@@ -101,6 +118,7 @@ Notes:
 - if you change scopes, revoke consent, or the refresh token expires, run `auth:login` again
 - when `--env-file` is passed, that file is authoritative over Bun auto-loaded env
 - `auth:status` reports whether auth is coming from the token file or `OUTLOOK_USER_TOKEN`
+- mailbox organization tools such as `mark_message_read_state`, `set_message_categories`, and `move_message` require `Mail.ReadWrite`; if that scope is newly added, re-run `auth:login`
 
 ### Subscription Notes
 

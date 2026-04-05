@@ -8,6 +8,11 @@ import readline from 'node:readline';
 import {Database} from 'bun:sqlite';
 import graphPkg from '@microsoft/microsoft-graph-client';
 import {ensurePrivateDir, readJsonFile, writeJsonFile, withLockedFile} from './auth-store.mjs';
+import {
+  classifyMessage as classifyOutlookMessage,
+  fetchMessageAttachments as fetchSharedMessageAttachments,
+  normalizeTicketSubject as normalizeSharedTicketSubject,
+} from './lib.mjs';
 
 const {Client} = graphPkg;
 
@@ -100,6 +105,25 @@ function getIndexDbPath(config) {
 
 function getNotificationLogPath(config) {
   return resolveMaybeRelative(config.envDir, config.env.OUTLOOK_NOTIFICATION_LOG_FILE, DEFAULT_NOTIFICATION_LOG);
+}
+
+function getGrantedScopes(config) {
+  if (config.env.OUTLOOK_USER_TOKEN) return null;
+  const tokens = readJsonFile(getTokenFilePath(config), null);
+  const scopeString = `${tokens?.scope || ''}`.trim();
+  if (!scopeString) return new Set();
+  return new Set(scopeString.split(/\s+/).filter(Boolean));
+}
+
+function assertGrantedScopes(config, requiredScopes, actionLabel) {
+  const granted = getGrantedScopes(config);
+  if (granted === null) return;
+  const missing = requiredScopes.filter((scope) => !granted.has(scope));
+  if (missing.length > 0) {
+    throw new Error(
+      `${actionLabel} requires Outlook delegated scope(s): ${missing.join(', ')}. Update OUTLOOK_OAUTH_SCOPES and run bun run auth:login.`
+    );
+  }
 }
 
 function getReceiverConfig(config) {
@@ -337,6 +361,55 @@ function summarizeMessage(message) {
   };
 }
 
+function summarizeAttachment(attachment) {
+  return {
+    id: attachment.id || '',
+    name: attachment.name || '',
+    contentType: attachment.contentType || '',
+    size: Number(attachment.size || 0),
+    isInline: Boolean(attachment.isInline),
+    contentId: attachment.contentId || '',
+    lastModifiedDateTime: attachment.lastModifiedDateTime || null,
+    type: attachment['@odata.type'] || '',
+  };
+}
+
+function isProbablyTextContentType(contentType) {
+  const normalized = `${contentType || ''}`.toLowerCase();
+  return (
+    normalized.startsWith('text/') ||
+    normalized.includes('json') ||
+    normalized.includes('xml') ||
+    normalized.includes('javascript')
+  );
+}
+
+function maybeDecodeAttachmentContent(attachment, {includeContent = false, maxBytes = 65536} = {}) {
+  if (!includeContent) return {};
+  const contentBytes = typeof attachment.contentBytes === 'string' ? attachment.contentBytes : '';
+  if (!contentBytes) {
+    return {contentIncluded: false, reason: 'Attachment content is unavailable from this attachment type.'};
+  }
+  const bytes = Buffer.from(contentBytes, 'base64');
+  if (bytes.length > maxBytes) {
+    return {
+      contentIncluded: false,
+      reason: `Attachment exceeds maxBytes (${bytes.length} > ${maxBytes}).`,
+    };
+  }
+  const result = {
+    contentIncluded: true,
+    contentBytesBase64: contentBytes,
+    decodedSize: bytes.length,
+  };
+  if (isProbablyTextContentType(attachment.contentType || '')) {
+    try {
+      result.text = bytes.toString('utf8');
+    } catch {}
+  }
+  return result;
+}
+
 function summarizeFolder(folder) {
   return {
     id: folder.id,
@@ -359,6 +432,14 @@ function summarizeSubscription(sub) {
     expirationDateTime: sub.expirationDateTime || null,
     clientState: sub.clientState || '',
     latestSupportedTlsVersion: sub.latestSupportedTlsVersion || '',
+  };
+}
+
+function summarizeCategory(category) {
+  return {
+    id: category.id || '',
+    displayName: category.displayName || '',
+    color: category.color || '',
   };
 }
 
@@ -926,6 +1007,31 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_message_attachments',
+    description: 'List attachment metadata for one Outlook message.',
+    inputSchema: {
+      type: 'object',
+      required: ['messageId'],
+      properties: {
+        messageId: {type: 'string'},
+      },
+    },
+  },
+  {
+    name: 'get_message_attachment',
+    description: 'Fetch one Outlook message attachment by attachmentId.',
+    inputSchema: {
+      type: 'object',
+      required: ['messageId', 'attachmentId'],
+      properties: {
+        messageId: {type: 'string'},
+        attachmentId: {type: 'string'},
+        includeContent: {type: 'boolean'},
+        maxBytes: {type: 'integer', minimum: 1, maximum: 1048576},
+      },
+    },
+  },
+  {
     name: 'list_conversation_messages',
     description: 'List messages for one Outlook conversationId.',
     inputSchema: {
@@ -935,6 +1041,30 @@ const TOOLS = [
         conversationId: {type: 'string'},
         folderId: {type: 'string'},
         max: {type: 'integer', minimum: 1, maximum: 100},
+      },
+    },
+  },
+  {
+    name: 'classify_message',
+    description: 'Classify one Outlook message for support/ticket workflows.',
+    inputSchema: {
+      type: 'object',
+      required: ['messageId'],
+      properties: {
+        messageId: {type: 'string'},
+      },
+    },
+  },
+  {
+    name: 'list_ticket_threads',
+    description: 'Scan recent Outlook messages and group Zendesk-style follower emails into ticket threads by conversationId.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folderId: {type: 'string'},
+        unreadOnly: {type: 'boolean'},
+        maxMessages: {type: 'integer', minimum: 1, maximum: 200},
+        maxThreads: {type: 'integer', minimum: 1, maximum: 100},
       },
     },
   },
@@ -1003,6 +1133,62 @@ const TOOLS = [
         messageId: {type: 'string'},
         body: {type: 'string'},
         replyAll: {type: 'boolean'},
+      },
+    },
+  },
+  {
+    name: 'list_categories',
+    description: 'List Outlook master categories for the authenticated user.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'create_category',
+    description: 'Create a new Outlook master category.',
+    inputSchema: {
+      type: 'object',
+      required: ['displayName'],
+      properties: {
+        displayName: {type: 'string'},
+        color: {type: 'string'},
+      },
+    },
+  },
+  {
+    name: 'set_message_categories',
+    description: 'Replace the categories on one Outlook message.',
+    inputSchema: {
+      type: 'object',
+      required: ['messageId', 'categories'],
+      properties: {
+        messageId: {type: 'string'},
+        categories: {type: 'array', items: {type: 'string'}},
+      },
+    },
+  },
+  {
+    name: 'mark_message_read_state',
+    description: 'Mark one Outlook message read or unread.',
+    inputSchema: {
+      type: 'object',
+      required: ['messageId', 'isRead'],
+      properties: {
+        messageId: {type: 'string'},
+        isRead: {type: 'boolean'},
+      },
+    },
+  },
+  {
+    name: 'move_message',
+    description: 'Move one Outlook message to another folder.',
+    inputSchema: {
+      type: 'object',
+      required: ['messageId', 'destinationFolderId'],
+      properties: {
+        messageId: {type: 'string'},
+        destinationFolderId: {type: 'string'},
       },
     },
   },
@@ -1228,6 +1414,28 @@ async function callTool(config, name, args = {}) {
         internetMessageHeaders: message.internetMessageHeaders || [],
       });
     }
+    case 'list_message_attachments': {
+      const attachments = await fetchSharedMessageAttachments(api, args.messageId);
+      return jsonText({
+        messageId: args.messageId,
+        count: attachments.length,
+        attachments: attachments.map(summarizeAttachment),
+      });
+    }
+    case 'get_message_attachment': {
+      const attachment = await api.request(
+        'GET',
+        `/me/messages/${encodeURIComponent(args.messageId)}/attachments/${encodeURIComponent(args.attachmentId)}`
+      );
+      return jsonText({
+        messageId: args.messageId,
+        attachment: summarizeAttachment(attachment),
+        ...maybeDecodeAttachmentContent(attachment, {
+          includeContent: Boolean(args.includeContent),
+          maxBytes: Number(args.maxBytes || 65536),
+        }),
+      });
+    }
     case 'list_conversation_messages': {
       const base = args.folderId ? `/me/mailFolders/${encodeURIComponent(args.folderId)}/messages` : '/me/messages';
       const messages = await api.listCollection(
@@ -1243,6 +1451,76 @@ async function callTool(config, name, args = {}) {
         conversationId: args.conversationId,
         count: messages.length,
         messages: messages.map(summarizeMessage),
+      });
+    }
+    case 'classify_message': {
+      const message = await api.request(
+        'GET',
+        buildPath(`/me/messages/${encodeURIComponent(args.messageId)}`, {
+          '$select': buildMessageSelect({includeBody: true}),
+        })
+      );
+      return jsonText({
+        messageId: args.messageId,
+        conversationId: message.conversationId || '',
+        classification: classifyOutlookMessage(message),
+        message: summarizeMessage(message),
+      });
+    }
+    case 'list_ticket_threads': {
+      const base = args.folderId ? `/me/mailFolders/${encodeURIComponent(args.folderId)}/messages` : '/me/messages';
+      const filters = [];
+      if (args.unreadOnly) filters.push('isRead eq false');
+      const messages = await api.listCollection(
+        buildPath(base, {
+          '$top': Math.min(Number(args.maxMessages || 100), 200),
+          '$orderby': 'receivedDateTime DESC',
+          '$select': buildMessageSelect({includeBody: true}),
+          ...(filters.length ? {'$filter': filters.join(' and ')} : {}),
+        }),
+        {max: args.maxMessages || 100}
+      );
+      const grouped = new Map();
+      for (const message of messages) {
+        const classification = classifyOutlookMessage(message);
+        if (classification.label !== 'zendesk_follower') continue;
+        const key = message.conversationId || message.id;
+        const current = grouped.get(key) || {
+          conversationId: key,
+          ticketId: classification.ticketId,
+          ticketUrl: classification.ticketUrl,
+          subject: classification.normalizedSubject || normalizeSharedTicketSubject(message.subject || ''),
+          messageCount: 0,
+          unreadCount: 0,
+          latestReceivedDateTime: message.receivedDateTime || message.sentDateTime || null,
+          latestMessageId: message.id,
+          latestSummary: classification.summary,
+          latestSender: classification.sender,
+          messageIds: [],
+        };
+        current.messageCount += 1;
+        current.unreadCount += message.isRead ? 0 : 1;
+        current.messageIds.push(message.id);
+        const candidateTime = new Date(message.receivedDateTime || message.sentDateTime || 0).getTime();
+        const currentTime = new Date(current.latestReceivedDateTime || 0).getTime();
+        if (!current.latestReceivedDateTime || candidateTime >= currentTime) {
+          current.latestReceivedDateTime = message.receivedDateTime || message.sentDateTime || null;
+          current.latestMessageId = message.id;
+          current.latestSummary = classification.summary;
+          current.latestSender = classification.sender;
+          current.subject = classification.normalizedSubject || current.subject;
+          current.ticketId = classification.ticketId || current.ticketId;
+          current.ticketUrl = classification.ticketUrl || current.ticketUrl;
+        }
+        grouped.set(key, current);
+      }
+      const threads = [...grouped.values()]
+        .sort((a, b) => new Date(b.latestReceivedDateTime || 0) - new Date(a.latestReceivedDateTime || 0))
+        .slice(0, Number(args.maxThreads || 50));
+      return jsonText({
+        count: threads.length,
+        scannedMessages: messages.length,
+        threads,
       });
     }
     case 'sync_mail_folder': {
@@ -1287,6 +1565,61 @@ async function callTool(config, name, args = {}) {
         messageId: args.messageId,
         replyAll: Boolean(args.replyAll),
       });
+    }
+    case 'list_categories': {
+      const categories = await api.request('GET', '/me/outlook/masterCategories');
+      return jsonText({
+        count: (categories.value || []).length,
+        categories: (categories.value || []).map(summarizeCategory),
+      });
+    }
+    case 'create_category': {
+      const category = await api.request('POST', '/me/outlook/masterCategories', {
+        body: {
+          displayName: args.displayName,
+          color: args.color || 'none',
+        },
+      });
+      return jsonText(summarizeCategory(category));
+    }
+    case 'set_message_categories': {
+      assertGrantedScopes(config, ['Mail.ReadWrite'], 'set_message_categories');
+      await api.request('PATCH', `/me/messages/${encodeURIComponent(args.messageId)}`, {
+        body: {
+          categories: args.categories || [],
+        },
+      });
+      const message = await api.request(
+        'GET',
+        buildPath(`/me/messages/${encodeURIComponent(args.messageId)}`, {
+          '$select': buildMessageSelect({includeBody: false}),
+        })
+      );
+      return jsonText(summarizeMessage(message));
+    }
+    case 'mark_message_read_state': {
+      assertGrantedScopes(config, ['Mail.ReadWrite'], 'mark_message_read_state');
+      await api.request('PATCH', `/me/messages/${encodeURIComponent(args.messageId)}`, {
+        body: {
+          isRead: Boolean(args.isRead),
+        },
+      });
+      const message = await api.request(
+        'GET',
+        buildPath(`/me/messages/${encodeURIComponent(args.messageId)}`, {
+          '$select': buildMessageSelect({includeBody: false}),
+        })
+      );
+      return jsonText(summarizeMessage(message));
+    }
+    case 'move_message': {
+      assertGrantedScopes(config, ['Mail.ReadWrite'], 'move_message');
+      const moved = await api.request('POST', `/me/messages/${encodeURIComponent(args.messageId)}/move`, {
+        body: {
+          destinationId: args.destinationFolderId,
+        },
+      });
+      return jsonText(summarizeMessage(moved));
     }
     case 'list_subscriptions': {
       const subscriptions = await api.listCollection(
@@ -1371,8 +1704,11 @@ async function handleRequest(config, message) {
         sendError(id, -32601, `Method not found: ${method}`);
     }
   } catch (error) {
+    const message = error?.message || 'Tool execution failed';
     const detail = error?.stack || error?.message || String(error);
-    sendResult(id, errorText(error.message || 'Tool execution failed', detail.slice(0, 8000)));
+    const includeDetail =
+      detail && detail !== message && !/requires Outlook delegated scope/i.test(message);
+    sendResult(id, errorText(message, includeDetail ? detail.slice(0, 8000) : null));
   }
 }
 
