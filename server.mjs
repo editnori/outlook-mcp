@@ -600,14 +600,17 @@ function deleteIndexedMailMessage(store, messageId) {
 async function syncMailFolder(config, args = {}) {
   const context = await getUserContext(config);
   const store = getIndexStore(config);
-  const folderScope = args.folderId || 'me';
-  const scope = args.folderId ? 'mail_folder_delta' : 'mail_root_delta';
+  if (!args.folderId) {
+    throw new Error('sync_mail_folder requires folderId because Microsoft Graph message delta is folder-scoped.');
+  }
+  const folderScope = args.folderId;
+  const scope = 'mail_folder_delta';
   const existing = args.fullResync
     ? null
     : store.statements.getSyncState.get(scope, folderScope) || null;
 
   let nextLink = existing?.cursor || buildPath(
-    args.folderId ? `/me/mailFolders/${encodeURIComponent(args.folderId)}/messages/delta` : '/me/messages/delta',
+    `/me/mailFolders/${encodeURIComponent(args.folderId)}/messages/delta`,
     {
       '$top': Math.min(Number(args.pageSize || 50), 100),
       '$select': 'id,conversationId,parentFolderId,subject,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,isRead,hasAttachments,importance,categories,bodyPreview,body,webLink',
@@ -640,7 +643,7 @@ async function syncMailFolder(config, args = {}) {
   }
 
   return {
-    folderId: args.folderId || null,
+    folderId: args.folderId,
     pageCount,
     syncedCount,
     deletedCount,
@@ -925,6 +928,7 @@ const TOOLS = [
     description: 'Sync one folder or the root mailbox into the local SQLite mail cache using Microsoft Graph delta.',
     inputSchema: {
       type: 'object',
+      required: ['folderId'],
       properties: {
         folderId: {type: 'string'},
         fullResync: {type: 'boolean'},
@@ -1002,7 +1006,7 @@ const TOOLS = [
     description: 'Create a Microsoft Graph subscription, for example on /me/messages.',
     inputSchema: {
       type: 'object',
-      required: ['resource', 'changeType', 'notificationUrl', 'expirationDateTime'],
+      required: ['resource', 'changeType', 'expirationDateTime'],
       properties: {
         resource: {type: 'string'},
         changeType: {type: 'string'},
@@ -1056,7 +1060,11 @@ const TOOLS = [
 
 async function callTool(config, name, args = {}) {
   if (name === 'receiver_status') {
-    return jsonText(getReceiverConfig(config));
+    const receiver = getReceiverConfig(config);
+    return jsonText({
+      ...receiver,
+      healthUrl: `http://${receiver.host}:${receiver.port}/health`,
+    });
   }
   if (name === 'list_received_notifications') {
     return jsonText(readNotificationLog(config, Number(args.max || 50)));
@@ -1278,14 +1286,15 @@ async function callTool(config, name, args = {}) {
       });
     }
     case 'create_subscription': {
+      const receiver = getReceiverConfig(config);
       const subscription = await api.request('POST', '/subscriptions', {
         body: {
           resource: args.resource,
           changeType: args.changeType,
-          notificationUrl: args.notificationUrl,
+          notificationUrl: args.notificationUrl || receiver.notificationUrl,
           expirationDateTime: args.expirationDateTime,
-          clientState: args.clientState,
-          lifecycleNotificationUrl: args.lifecycleNotificationUrl,
+          clientState: args.clientState || receiver.clientState || undefined,
+          lifecycleNotificationUrl: args.lifecycleNotificationUrl || receiver.lifecycleNotificationUrl || undefined,
           latestSupportedTlsVersion: args.latestSupportedTlsVersion,
         },
       });

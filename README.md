@@ -57,6 +57,9 @@ The cache is keyed by `conversationId`, so Outlook thread continuity stays expli
 Unlike the Webex MCP cleanup, this repo keeps live Graph search and cached search as
 separate tools on purpose. There is no silent fallback between them.
 
+`sync_mail_folder` is intentionally folder-scoped because Microsoft Graph message delta
+tracks changes per folder.
+
 ### Install
 
 ```bash
@@ -120,6 +123,8 @@ bun run start:receiver
 
 It handles Microsoft Graph validation requests and appends received notification payloads
 to a local NDJSON log file.
+
+`create_subscription` can use the receiver scaffold defaults when you omit `notificationUrl`.
 
 Important:
 
