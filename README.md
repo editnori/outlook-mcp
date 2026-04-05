@@ -118,7 +118,8 @@ Notes:
 - if you change scopes, revoke consent, or the refresh token expires, run `auth:login` again
 - when `--env-file` is passed, that file is authoritative over Bun auto-loaded env
 - `auth:status` reports whether auth is coming from the token file or `OUTLOOK_USER_TOKEN`
-- mailbox organization tools such as `mark_message_read_state`, `set_message_categories`, and `move_message` require `Mail.ReadWrite`; if that scope is newly added, re-run `auth:login`
+- mailbox organization tools such as `mark_message_read_state`, `set_message_categories`, and `move_message` require `Mail.ReadWrite`; the default scope set does not request it
+- if your tenant allows it and you want those mailbox-write tools, add `Mail.ReadWrite` to `OUTLOOK_OAUTH_SCOPES` and then re-run `auth:login`
 
 ### Subscription Notes
 

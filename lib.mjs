@@ -15,7 +15,7 @@ const DEFAULT_STATE_DIR = path.join(
 const DEFAULT_TOKEN_FILE = path.join(DEFAULT_STATE_DIR, 'tokens.json');
 const DEFAULT_NOTIFICATION_LOG = path.join(DEFAULT_STATE_DIR, 'notifications.ndjson');
 const DEFAULT_SCOPES =
-  'offline_access openid profile User.Read Mail.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite';
+  'offline_access openid profile User.Read Mail.Read Mail.Send Calendars.Read Calendars.ReadWrite';
 
 export function buildMessageSelect({includeBody = false} = {}) {
   const fields = [
